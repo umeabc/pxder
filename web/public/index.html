@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pxder · 插画归档工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="registration-bar" aria-hidden="true">
+    <span class="reg-mark">┼ pxder / 插画归档</span>
+    <span class="reg-swatches">
+      <i class="swatch swatch-ink" title="Ink"></i>
+      <i class="swatch swatch-blue" title="Blueprint"></i>
+      <i class="swatch swatch-ivory" title="Ivory"></i>
+      <i class="swatch swatch-green" title="Archive Green"></i>
+      <i class="swatch swatch-rust" title="Rust"></i>
+    </span>
+    <span class="reg-sheet">Pixiv 下载器</span>
+  </div>
+
+  <div id="notice" class="notice-banner" role="status" aria-live="polite" hidden></div>
+
+  <!-- 登录视图 -->
+  <section id="login-view" class="login-stage" aria-labelledby="login-title">
+    <div class="login-card">
+      <div class="card-folio-header">
+        <span class="folio-code">插画归档工作台</span>
+        <span class="pill">管理员</span>
+      </div>
+      <h1 id="login-title" class="login-title">PXDER 归档工作台</h1>
+      <p class="login-subtitle">登录后可添加下载任务、导入旧图库索引，以及查看缺页。</p>
+
+      <div id="login-error" class="error" role="alert" hidden></div>
+
+      <form id="login-form" class="stack-form" novalidate>
+        <div class="field-group">
+          <label for="login-password" class="field-label">管理员密码</label>
+          <input
+            type="password"
+            id="login-password"
+            name="password"
+            class="field-input"
+            placeholder="输入部署时设置的密码"
+            autocomplete="current-password"
+            required
+          >
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">登录工作台</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <!-- 主控台视图 -->
+  <div id="app-view" class="workbench-shell" hidden>
+    <aside class="spine-nav" aria-label="主导航">
+      <div class="spine-brand">
+        <div class="brand-mark">PXDER</div>
+        <div class="brand-caption">插画归档工作台</div>
+      </div>
+
+      <nav class="spine-links" aria-label="工作台分区">
+        <a href="#dispatch" class="spine-link is-active" data-view="dispatch" aria-current="page">
+          <span class="spine-index">01</span>
+          <span class="spine-label">新建任务</span>
+        </a>
+        <a href="#queue" class="spine-link" data-view="queue">
+          <span class="spine-index">02</span>
+          <span class="spine-label">任务队列</span>
+          <span id="queue-count" class="pill">0</span>
+        </a>
+        <a href="#library" class="spine-link" data-view="library">
+          <span class="spine-index">03</span>
+          <span class="spine-label">旧库索引</span>
+        </a>
+        <a href="#settings" class="spine-link" data-view="settings">
+          <span class="spine-index">04</span>
+          <span class="spine-label">Pixiv 设置</span>
+        </a>
+      </nav>
+
+      <div class="spine-footer">
+        <button type="button" id="logout-button" class="btn btn-ghost">退出登录</button>
+      </div>
+    </aside>
+
+    <main class="workbench-main">
+      <!-- 01 任务派发 -->
+      <section id="dispatch" class="panel-section" aria-labelledby="dispatch-heading">
+        <header class="section-header">
+          <div>
+            <h2 id="dispatch-heading" class="section-title">新建下载任务</h2>
+          </div>
+          <p class="section-desc">从 Pixiv 获取原图时，自动跳过旧库中已有的页。</p>
+        </header>
+
+        <p id="pixiv-help" class="helper" hidden>首次使用请先<a href="#settings">配置 Pixiv Refresh Token</a>。导入旧库不需要 Pixiv 登录。</p>
+        <form id="job-form" class="workbench-card stack-form" novalidate>
+          <div class="form-grid">
+            <div class="field-group">
+              <label for="job-type" class="field-label">任务类型</label>
+              <select id="job-type" name="type" class="field-select">
+                <option value="pid">按作品 PID 下载</option>
+                <option value="uid">按画师 UID 下载</option>
+                <option value="bookmark">同步我的收藏</option>
+                <option value="follow">同步我关注的画师</option>
+                <option value="update">更新已知画师</option>
+              </select>
+            </div>
+
+            <div id="scope-field" class="field-group">
+              <label for="job-scope" class="field-label">可见范围</label>
+              <select id="job-scope" name="scope" class="field-select">
+                <option value="public">公开 (public)</option>
+                <option value="private">非公开 / 私密 (private)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="value-field" class="field-group">
+            <label for="job-values" class="field-label">ID 或 Pixiv 链接</label>
+            <textarea
+              id="job-values"
+              name="values"
+              class="field-textarea"
+              rows="5"
+              placeholder="输入一个或多个数字 ID（支持换行、空格或逗号分隔）…"
+            ></textarea>
+            <span class="field-hint">最多 100 项，可用空格、换行或逗号分隔。</span>
+          </div>
+
+          <div class="field-check-row">
+            <label class="checkbox-label" for="job-dry">
+              <input type="checkbox" id="job-dry" name="dryRun">
+              <span class="checkbox-text">仅筛选，统计旧库命中和缺失页，不下载图片</span>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="job-submit" class="btn btn-primary">加入下载队列</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- 02 作业队列 -->
+      <section id="queue" class="panel-section" aria-labelledby="queue-heading" hidden>
+        <header class="section-header">
+          <div>
+            <h2 id="queue-heading" class="section-title">任务队列</h2>
+          </div>
+          <p class="section-desc">查看已发现、已跳过、缺失和失败的数量。关闭网页不会中断服务器上的任务。</p>
+        </header>
+
+        <div id="jobs-list" class="ledger-list">
+          <div class="empty-state">正在读取任务队列。</div>
+        </div>
+      </section>
+
+      <!-- 03 馆藏曲目 -->
+      <section id="library" class="panel-section" aria-labelledby="library-heading" hidden>
+        <header class="section-header">
+          <div>
+            <h2 id="library-heading" class="section-title">旧库索引</h2>
+          </div>
+          <div class="header-actions">
+            <button type="button" id="scan-button" class="btn btn-secondary" disabled>扫描服务器旧目录</button>
+          </div>
+        </header>
+
+        <p id="scan-hint" class="helper">如果图片仍在旧电脑上，导出索引即可，不用上传图片。</p>
+        <div class="stats-strip">
+          <div class="stat-box">
+            <span class="stat-label">已登记页 / 动图</span>
+            <strong id="assets-count" class="stat-value">0</strong>
+          </div>
+          <div class="stat-box">
+            <span class="stat-label">作品数</span>
+            <strong id="works-count" class="stat-value">0</strong>
+          </div>
+        </div>
+
+        <div class="workbench-card stack-form">
+          <div class="card-subheader">
+            <h3 class="card-title">上传本机旧库索引</h3>
+            <p class="card-note">
+              在旧图库所在的电脑运行这条命令，再上传生成的 JSON。索引不含图片和登录凭据。
+              <code>node web/export-library.js "旧图目录" pxder-library.json</code>
+            </p>
+          </div>
+
+          <form id="import-form" class="inline-import-form" novalidate>
+            <div class="field-group file-field-group">
+              <label for="manifest-file" class="field-label">选择清单文件 (.json)</label>
+              <input
+                type="file"
+                id="manifest-file"
+                name="manifest"
+                class="field-file"
+                accept=".json,application/json"
+                required
+              >
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">导入索引</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="sub-ledger">
+          <h3 class="sub-ledger-title">索引来源</h3>
+          <div id="sources-list" class="ledger-list">
+            <div class="empty-state">正在读取索引来源。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 04 凭据设置 -->
+      <section id="settings" class="panel-section" aria-labelledby="settings-heading" hidden>
+        <header class="section-header">
+          <div>
+            <h2 id="settings-heading" class="section-title">Pixiv 设置</h2>
+          </div>
+          <div class="header-status">
+            <span class="field-label">当前凭据状态：</span>
+            <span id="pixiv-state" class="pill">未检测</span>
+          </div>
+        </header>
+
+        <form id="pixiv-form" class="workbench-card stack-form" novalidate>
+          <div class="field-group">
+            <label for="pixiv-token" class="field-label">Pixiv Refresh Token</label>
+            <input
+              type="password"
+              id="pixiv-token"
+              name="refreshToken"
+              class="field-input"
+              placeholder="粘贴 OAuth Refresh Token…"
+              autocomplete="off"
+              required
+            >
+            <span class="field-hint">已有 pxder 登录态时，可在旧电脑运行 <code>pxder --export-token</code> 获取。服务器验证并保存后不会再显示 Token。</span>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">保存并验证 Token</button>
+            <button type="button" id="remove-token" class="btn btn-danger">清除已存凭据</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

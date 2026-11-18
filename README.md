@@ -1,5 +1,7 @@
 # pixiv downloader
 
+**WebUI 分支：** [Docker 部署、登录与旧图库迁移](WEBUI.md)。下方保留原版 CLI 用法。
+
 > 由于 Pixiv 已不再支持客户端的登录 API，请更新到 v2.12.0 及以后的版本以使用新的登录方式（详见下文）
 >
 > 本项目因本人不再使用且摸了而进入仅维护状态，暂不考虑任何非必要的 Feature Request

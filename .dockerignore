@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!LICENSE
+!src/
+!src/pixiv-api-config.js
+!web/
+!web/*.js
+!web/public/
+!web/public/**

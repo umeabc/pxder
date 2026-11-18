@@ -60,5 +60,11 @@ typings/
 # dotenv environment variables file
 .env
 
+# WebUI state, private exports and downloads
+/.pxder-web/
+/downloads/
+/pxder-library*.json
+/web/test/__pycache__/
+
 # next.js build output
 .next
