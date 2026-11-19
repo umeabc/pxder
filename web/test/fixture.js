@@ -22,15 +22,15 @@ function reply(status, payload, headers = {}) {
   };
 }
 
-function illust(id, count = 1) {
+function illust(id, count = 1, uid = 88, pinned = false) {
   return {
-    id, title: id === 42 ? '雨中邮局' : '树影', type: 'illust', page_count: count, user: { id: 88, name: '示例画师' },
+    id, title: id === 42 ? '雨中邮局' : '树影', type: 'illust', page_count: count, is_pinned: pinned, user: { id: uid, name: '示例画师' },
     meta_pages: count > 1 ? Array.from({ length: count }, (_, i) => ({ image_urls: { original: imageUrl(id, i) } })) : [],
     meta_single_page: count === 1 ? { original_image_url: imageUrl(id, 0) } : {},
   };
 }
 
-async function fixture({ port = 0, withToken = false } = {}) {
+async function fixture({ port = 0, withToken = false, artistFeed, assetStatus } = {}) {
   const parent = path.resolve(tmpdir());
   const root = await fs.mkdtemp(path.join(parent, 'pxder-test-'));
   const downloads = path.join(root, 'downloads');
@@ -53,6 +53,8 @@ async function fixture({ port = 0, withToken = false } = {}) {
       return reply(200, { response: { refresh_token: TOKEN, access_token: 'fake-access-token', user: { id: 99 }, expires_in: 3600 } });
     }
     if (url.hostname === 'i.pximg.net') {
+      const status = assetStatus?.(url);
+      if (status && status !== 200) return reply(status, '');
       return {
         status: 200,
         ok: true,
@@ -75,7 +77,12 @@ async function fixture({ port = 0, withToken = false } = {}) {
       return url.searchParams.has('offset') ? reply(200, { illusts: [illust(43)], next_url: null }) :
         reply(200, { illusts: [illust(42, 2)], next_url: 'https://app-api.pixiv.net/v1/user/bookmarks/illust?offset=30' });
     }
-    if (url.pathname === '/v1/user/illusts') return reply(200, { illusts: [illust(42, 2)], next_url: null });
+    if (url.pathname === '/v1/user/illusts') {
+      const uid = Number(url.searchParams.get('user_id'));
+      const offset = Number(url.searchParams.get('offset'));
+      const feed = artistFeed?.(uid, offset) || { illusts: [illust(42, 2)], next_url: null };
+      return reply(200, feed);
+    }
     if (url.pathname === '/v1/user/following') return reply(200, { user_previews: [{ user: { id: 88 } }], next_url: null });
     if (url.pathname === '/' && options.method === 'HEAD') return reply(404, undefined);
     return reply(404, '');
@@ -96,4 +103,4 @@ async function fixture({ port = 0, withToken = false } = {}) {
   return { app, open, clean, calls, legacy, downloads };
 }
 
-module.exports = { fixture, PASSWORD, TOKEN };
+module.exports = { fixture, illust, PASSWORD, TOKEN };

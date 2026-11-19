@@ -41,7 +41,11 @@ function parseJob(body) {
   return { type, ids, scope: visibility, dryRun: dryRun === true };
 }
 
-async function* collect(pixiv, spec, artists, signal) {
+function artistWorks(pixiv, uid, signal) {
+  return pixiv.pages('/v1/user/illusts', { user_id: uid, type: 'illust' }, 'illusts', signal);
+}
+
+async function* collect(pixiv, spec, signal) {
   if (spec.type === 'pid') {
     for (const pid of spec.ids) {
       try { yield { illust: (await pixiv.get('/v1/illust/detail', { illust_id: pid }, signal)).illust }; }
@@ -55,9 +59,8 @@ async function* collect(pixiv, spec, artists, signal) {
     for await (const illust of pixiv.pages('/v1/user/bookmarks/illust', { user_id: auth.userId, restrict: spec.scope }, 'illusts', signal)) yield { illust };
     return;
   }
-  const ids = spec.type === 'uid' ? spec.ids : artists;
   async function* authorIds() {
-    if (spec.type !== 'follow') { yield* ids; return; }
+    if (spec.type === 'uid') { yield* spec.ids; return; }
     for await (const item of pixiv.pages('/v1/user/following', { user_id: auth.userId, restrict: spec.scope }, 'user_previews', signal)) {
       const id = String(item?.user?.id);
       if (ID.test(id) && id !== '11') yield id;
@@ -69,7 +72,7 @@ async function* collect(pixiv, spec, artists, signal) {
     if (seen.size >= 10_000) throw new PixivError('任务画师过多，请拆分后重试。', { stop: true });
     seen.add(uid);
     try {
-      for await (const illust of pixiv.pages('/v1/user/illusts', { user_id: uid, type: 'illust' }, 'illusts', signal)) yield { illust };
+      for await (const illust of artistWorks(pixiv, uid, signal)) yield { illust };
     } catch (error) { signal.throwIfAborted(); yield { error, label: `画师 ${uid}` }; }
   }
 }
@@ -125,11 +128,79 @@ class JobRunner {
     });
   }
 
+  async locateAsset(destination, group, file) {
+    if (this.store.archived(file.key)) return { present: true };
+    const target = await destination.locate(group, file.name);
+    const existing = this.store.downloaded(file.key);
+    const found = await destination.existing(existing) ? existing : (await destination.existing(target.relative) ? target.relative : null);
+    return { present: Boolean(found), found, target };
+  }
+
+  async saveAsset(destination, group, file, target, counts, signal) {
+    const written = await downloadAsset(this.pixiv, file, await destination.locate(group, file.name, true), signal);
+    this.store.markDownloaded(file.key, target.relative);
+    if (written) counts.downloaded++; else counts.skipped++;
+  }
+
+  async updateArtist(job, uid, destination, counts, signal, checkpoint, fail) {
+    const pending = [];
+    const worksSeen = new Map();
+    let matched = false;
+    for await (const illust of artistWorks(this.pixiv, uid, signal)) {
+      signal.throwIfAborted();
+      if (String(illust?.user?.id) !== uid) throw new PixivError('作品的画师与此次查询不匹配，未下载该画师的新图。');
+      const pinned = illust.is_pinned === true || illust.is_pinned === 1;
+      const pid = String(illust.id);
+      if (worksSeen.has(pid)) {
+        if (!pinned && worksSeen.get(pid)) { matched = true; break; }
+        continue;
+      }
+      const files = workAssets(illust);
+      if (counts.total + files.length > MAX_ASSETS) throw new PixivError('任务超过 50 万个文件，请拆分后重试。', { stop: true });
+      const group = destination.group(job, illust);
+      const missing = [];
+      for (const file of files) {
+        const state = await this.locateAsset(destination, group, file);
+        counts.total++;
+        if (state.present) {
+          counts.skipped++;
+          if (state.found && !job.dryRun) this.store.markDownloaded(file.key, state.found);
+        } else {
+          missing.push({ file, target: state.target });
+          if (job.dryRun) counts.missing++;
+        }
+      }
+      // Only a work that was already complete can stop the newest-first feed.
+      const complete = missing.length === 0;
+      worksSeen.set(pid, complete);
+      checkpoint();
+      if (complete && !pinned) { matched = true; break; }
+      if (!job.dryRun && missing.length) pending.push({ group, missing });
+    }
+    // Publish older works before newer ones. If a write fails, leave newer work
+    // untouched so it cannot become a false cutoff on the next run.
+    for (const { group, missing } of pending.reverse()) {
+      for (const { file, target } of missing) {
+        signal.throwIfAborted();
+        try {
+          if (this.store.archived(file.key)) counts.skipped++;
+          else await this.saveAsset(destination, group, file, target, counts, signal);
+        } catch (error) {
+          fail(error, `画师 ${uid} / 作品 ${file.key[0]}`);
+          return { matched, halted: Boolean(error.stop) };
+        }
+        checkpoint();
+      }
+    }
+    return { matched, halted: false };
+  }
+
   async execute(job, signal) {
     const counts = initialCounts();
     let message = null;
+    let summary = '';
     let last = 0;
-    const write = (status = 'running') => this.store.updateJob(job.id, status, counts, message);
+    const write = (status = 'running') => this.store.updateJob(job.id, status, counts, [summary, message].filter(Boolean).join('；') || null);
     const checkpoint = () => {
       const now = Date.now();
       if (now - last < 400) return;
@@ -164,7 +235,32 @@ class JobRunner {
         message = `${label}：${describe(error)}`;
         checkpoint();
       };
-      for await (const { illust, error, label } of collect(this.pixiv, job, artists, signal)) {
+      if (job.type === 'update') {
+        let checked = 0;
+        let matched = 0;
+        for (const uid of artists) {
+          signal.throwIfAborted();
+          summary = `已检查画师 ${checked}/${artists.length}，正在处理 UID ${uid}`;
+          checkpoint();
+          let halted = false;
+          try {
+            const result = await this.updateArtist(job, uid, destination, counts, signal, checkpoint, fail);
+            if (result.matched) matched++;
+            halted = result.halted;
+          } catch (error) {
+            if (error.stop) throw error;
+            counts.total++;
+            fail(error, `画师 ${uid}`);
+          }
+          checked++;
+          if (halted) break;
+        }
+        summary = `已检查画师 ${checked}/${artists.length}，${matched} 位命中旧作后停止翻页`;
+        const working = counts.downloaded || counts.skipped || counts.missing;
+        write(counts.failed ? (working ? 'partial' : 'failed') : 'completed');
+        return;
+      }
+      for await (const { illust, error, label } of collect(this.pixiv, job, signal)) {
         signal.throwIfAborted();
         if (error) {
           counts.total++;
@@ -184,21 +280,12 @@ class JobRunner {
           seen.add(key);
           counts.total++;
           try {
-            if (this.store.archived(file.key)) counts.skipped++;
-            else {
-              const target = await destination.locate(group, file.name);
-              const existing = this.store.downloaded(file.key);
-              const found = await destination.existing(existing) ? existing : (await destination.existing(target.relative) ? target.relative : null);
-              if (found) {
-                counts.skipped++;
-                if (!job.dryRun) this.store.markDownloaded(file.key, found);
-              } else if (job.dryRun) counts.missing++;
-              else {
-                const result = await downloadAsset(this.pixiv, file, await destination.locate(group, file.name, true), signal);
-                this.store.markDownloaded(file.key, target.relative);
-                if (result) counts.downloaded++; else counts.skipped++;
-              }
-            }
+            const state = await this.locateAsset(destination, group, file);
+            if (state.present) {
+              counts.skipped++;
+              if (state.found && !job.dryRun) this.store.markDownloaded(file.key, state.found);
+            } else if (job.dryRun) counts.missing++;
+            else await this.saveAsset(destination, group, file, state.target, counts, signal);
           } catch (error) {
             fail(error, `作品 ${file.key[0]}`);
             if (error.stop) {

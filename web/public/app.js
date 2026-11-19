@@ -107,6 +107,7 @@ function setForm() {
   $('job-values').required = withIds;
   $('job-values').placeholder = type === 'pid' ? '作品 PID 或 Pixiv 作品链接' : '画师 UID 或 Pixiv 画师链接';
   $('scope-field').hidden = !['bookmark', 'follow'].includes(type);
+  $('update-hint').hidden = type !== 'update';
   $('job-submit').textContent = $('job-dry').checked ? '开始筛选' : '加入下载队列';
 }
 
