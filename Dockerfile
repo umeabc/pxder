@@ -1,5 +1,7 @@
 FROM node:24-bookworm-slim
 WORKDIR /app
+COPY web/package.json web/package-lock.json /app/web/
+RUN npm ci --prefix /app/web --omit=dev --no-audit --no-fund
 COPY --chown=node:node LICENSE /app/LICENSE
 COPY --chown=node:node src/pixiv-api-config.js /app/src/pixiv-api-config.js
 COPY --chown=node:node web/ /app/web/

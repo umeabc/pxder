@@ -6,6 +6,7 @@ const path = require('node:path');
 const { createHash, randomBytes, timingSafeEqual } = require('node:crypto');
 const { Store } = require('./store');
 const { Pixiv, PixivError } = require('./pixiv');
+const { createTransport, proxySetting, probe, envProxy } = require('./httpclient');
 const { JobRunner, RequestError, parseJob } = require('./jobs');
 const { parseManifest, MAX_BYTES } = require('./library');
 
@@ -57,8 +58,8 @@ async function jsonBody(req, limit = 32 * 1024) {
 function configuredOrigin(value) {
   if (!value) return null;
   const url = new URL(value);
-  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || !['https:', 'http:'].includes(url.protocol) || (url.protocol === 'http:' && !LOOPBACK.has(url.hostname))) {
-    throw new Error('PXDER_ORIGIN must be an HTTPS origin (HTTP is allowed on loopback only).');
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || !['https:', 'http:'].includes(url.protocol)) {
+    throw new Error('PXDER_ORIGIN must be a bare origin such as https://pxder.example.com (no path).');
   }
   return url.origin;
 }
@@ -82,9 +83,11 @@ function sameOrigin(req, origin) {
 }
 
 async function createApp(options = {}) {
-  const { password, pixivToken, pixivFetcher, origin } = options;
+  const { password, pixivToken, pixivTransport, origin } = options;
+  const proxy = options.proxy?.trim();
   if (typeof password !== 'string' || password.length < 16 || password.length > 1024) throw new Error('Set PXDER_PASSWORD to a strong password (16–1024 characters).');
   if (pixivToken && !validToken(pixivToken)) throw new Error('PXDER_PIXIV_TOKEN has an invalid format.');
+  if (proxy) proxySetting(proxy);
   const secret = hash(password);
   const expectedOrigin = configuredOrigin(origin);
   const secure = expectedOrigin?.startsWith('https://');
@@ -100,10 +103,31 @@ async function createApp(options = {}) {
   const sessions = new Map();
   const attempts = new Map();
   let tokenBusy = false;
+  let proxyBusy = false;
   const tokenInfo = () => {
     const token = pixivToken || store.setting('pixiv_refresh');
     return { configured: Boolean(token), source: pixivToken ? 'env' : token ? 'saved' : null };
   };
+  const getProxy = () => proxy || store.setting('pixiv_proxy');
+  const proxyInfo = () => {
+    const value = getProxy();
+    const parsed = proxySetting(value);
+    return { mode: parsed.kind === 'env' ? (envProxy() ? 'system' : 'direct') : parsed.kind,
+      source: proxy ? 'env' : value ? 'saved' : null, value: parsed.display ?? null };
+  };
+  const transport = pixivTransport ?? createTransport({ getProxy });
+  async function testProxy(value) {
+    const tester = pixivTransport ?? createTransport({ getProxy: () => value });
+    try { return await probe(tester, { signal: AbortSignal.timeout(12_000) }); }
+    finally { if (!pixivTransport) tester.close(); }
+  }
+  function submittedProxy(body) {
+    if (typeof body?.url !== 'string' || !body.url.trim()) throw new RequestError(400, '请输入代理地址或 disable。');
+    try {
+      const parsed = proxySetting(body.url);
+      return parsed.kind === 'disable' ? 'disable' : parsed.url;
+    } catch (error) { throw new RequestError(400, error.message); }
+  }
   const pixiv = new Pixiv({
     getToken: () => pixivToken || store.setting('pixiv_refresh'),
     rotateToken: (current, replacement) => {
@@ -111,10 +135,9 @@ async function createApp(options = {}) {
       if (current !== replacement) store.setSetting('pixiv_refresh', replacement);
       return true;
     },
-    fetcher: pixivFetcher,
+    transport,
   });
   const runner = new JobRunner({ store, downloads: await fs.realpath(downloads), library, pixiv, configured: () => tokenInfo().configured });
-
   const server = http.createServer({ requestTimeout: 60_000, headersTimeout: 10_000, keepAliveTimeout: 5_000, maxHeaderSize: 16_384 }, (req, res) => {
     baseHeaders(res);
     handle(req, res).catch(error => {
@@ -178,12 +201,12 @@ async function createApp(options = {}) {
       res.setHeader('Set-Cookie', sessionCookie('', secure));
       return json(res, 200, { authenticated: false });
     }
-    if (route === '/api/status' && method === 'GET') return json(res, 200, { pixiv: tokenInfo(), queue: store.queueCounts() });
+    if (route === '/api/status' && method === 'GET') return json(res, 200, { pixiv: tokenInfo(), proxy: proxyInfo(), queue: store.queueCounts() });
     if (route === '/api/pixiv' && (method === 'POST' || method === 'DELETE')) {
       const body = method === 'POST' ? await jsonBody(req) : null;
       const queue = store.queueCounts();
       if (pixivToken) throw new RequestError(409, '凭据由服务器环境变量管理，请在服务器上修改。');
-      if (tokenBusy || queue.active || queue.queued) throw new RequestError(409, '请等待当前任务结束后修改 Pixiv 凭据。');
+      if (tokenBusy || proxyBusy || queue.active || queue.queued) throw new RequestError(409, '请等待当前任务结束后修改 Pixiv 凭据。');
       if (method === 'DELETE') {
         store.setSetting('pixiv_refresh', null);
         pixiv.forget();
@@ -200,10 +223,38 @@ async function createApp(options = {}) {
       }
       return json(res, 200, tokenInfo());
     }
+    if (route === '/api/proxy/test' && method === 'POST') {
+      const body = await jsonBody(req, 8192);
+      if (proxyBusy) throw new RequestError(409, '正在测试连接，请稍后再试。');
+      const value = !proxy && body?.url !== undefined ? submittedProxy(body) : getProxy();
+      proxyBusy = true;
+      try { return json(res, 200, { checks: await testProxy(value) }); }
+      finally { proxyBusy = false; }
+    }
+    if (route === '/api/proxy' && (method === 'POST' || method === 'DELETE')) {
+      const body = method === 'POST' ? await jsonBody(req, 8192) : null;
+      if (proxy) throw new RequestError(409, '代理由 PXDER_PROXY 管理，请在服务器上修改。');
+      const queue = store.queueCounts();
+      if (tokenBusy || proxyBusy || queue.active || queue.queued) throw new RequestError(409, '请等待当前操作和任务结束后修改代理。');
+      if (method === 'DELETE') {
+        store.setSetting('pixiv_proxy', null);
+        return json(res, 200, proxyInfo());
+      }
+      const value = submittedProxy(body);
+      proxyBusy = true;
+      try {
+        if (value !== 'disable') {
+          const failed = (await testProxy(value)).filter(item => !item.reachable);
+          if (failed.length) throw new RequestError(422, `${failed.map(item => item.label).join('、')} 未连通，原设置未变。`);
+        }
+        store.setSetting('pixiv_proxy', value);
+        return json(res, 200, proxyInfo());
+      } finally { proxyBusy = false; }
+    }
     if (route === '/api/jobs' && method === 'GET') return json(res, 200, { jobs: store.jobs() });
     if (route === '/api/jobs' && method === 'POST') {
       const spec = parseJob(await jsonBody(req));
-      if (tokenBusy) throw new RequestError(409, '正在验证 Pixiv 登录，请稍后再试。');
+      if (tokenBusy || proxyBusy) throw new RequestError(409, '正在验证登录或代理，请稍后再试。');
       return json(res, 202, { job: runner.enqueue(spec) });
     }
     const operation = /^\/api\/jobs\/([a-f0-9-]{36})\/(cancel|retry)$/.exec(route);
@@ -212,7 +263,7 @@ async function createApp(options = {}) {
       const job = store.job(operation[1]);
       if (!job) throw new RequestError(404, '找不到该任务。');
       if (operation[2] === 'cancel') return json(res, 200, { job: runner.cancel(job) });
-      if (tokenBusy || ['queued', 'running'].includes(job.status)) throw new RequestError(409, '任务尚未结束。');
+      if (tokenBusy || proxyBusy || ['queued', 'running'].includes(job.status)) throw new RequestError(409, '任务尚未结束。');
       const { type, ids, scope, dryRun } = job;
       return json(res, 202, { job: runner.enqueue({ type, ids, scope, dryRun }) });
     }
@@ -241,6 +292,7 @@ async function createApp(options = {}) {
     const disconnect = new Promise(resolve => server.close(resolve));
     await runner.close();
     await disconnect;
+    if (!pixivTransport) transport.close();
     store.close();
   } };
 }
@@ -253,6 +305,7 @@ async function main() {
   const host = process.env.PXDER_HOST || '127.0.0.1';
   const app = await createApp({
     password: process.env.PXDER_PASSWORD, origin: process.env.PXDER_ORIGIN, pixivToken: process.env.PXDER_PIXIV_TOKEN,
+    proxy: process.env.PXDER_PROXY,
     dataDir: process.env.PXDER_DATA_DIR, downloadDir: process.env.PXDER_DOWNLOAD_DIR, libraryDir: process.env.PXDER_LIBRARY_DIR,
   });
   app.server.on('error', error => {

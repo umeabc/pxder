@@ -12,6 +12,7 @@ const viewLinks = [...document.querySelectorAll('[data-view]')];
 const views = new Set(viewLinks.map(link => link.dataset.view));
 let signedIn = false;
 let polling = false;
+let proxyPending = false;
 let jobs = [];
 let status = { pixiv: { configured: false, source: null }, queue: emptyCounts() };
 let library = null;
@@ -69,6 +70,8 @@ function showSession(authenticated) {
     $('job-form').reset();
     $('import-form').reset();
     $('pixiv-form').reset();
+    $('proxy-form').reset();
+    $('proxy-result').hidden = true;
     $('queue-count').textContent = '0';
     $('assets-count').textContent = '—';
     $('works-count').textContent = '—';
@@ -108,7 +111,14 @@ function setForm() {
 }
 
 function updateState() {
-  const { pixiv, queue } = status;
+  const { pixiv, queue, proxy } = status;
+  const locked = proxy?.source === 'env';
+  $('proxy-state').textContent = (proxy?.value ?? ({ system: '使用系统代理', disable: '已关闭代理（直连）', direct: '直连（未设置代理）' })[proxy?.mode] ?? '正在读取代理设置。') + (locked ? '（由服务器管理）' : '');
+  $('proxy-url').disabled = locked || proxyPending;
+  $('proxy-form').querySelector('[type="submit"]').disabled = locked || proxyPending;
+  $('test-proxy').disabled = proxyPending;
+  $('remove-proxy').hidden = proxy?.source !== 'saved';
+  $('remove-proxy').disabled = proxyPending;
   $('queue-count').textContent = number.format(queue.active + queue.queued);
   $('pixiv-state').classList.toggle('ok', pixiv.configured);
   $('pixiv-state').textContent = pixiv.source === 'env' ? '服务器已配置' : pixiv.configured ? '已保存' : '未配置';
@@ -323,6 +333,39 @@ $('import-form').addEventListener('submit', event => {
     notice(`已导入索引：${number.format(source.count)} 条记录。`);
   });
 });
+async function proxyAction(work) {
+  if (proxyPending) return;
+  const result = $('proxy-result');
+  proxyPending = true;
+  updateState();
+  result.textContent = '正在处理…';
+  result.hidden = false;
+  try { result.textContent = await work(); }
+  catch (error) { result.textContent = error.message; }
+  finally { proxyPending = false; if (signedIn) updateState(); }
+}
+
+$('proxy-form').addEventListener('submit', event => {
+  event.preventDefault();
+  proxyAction(async () => {
+    const url = $('proxy-url').value.trim();
+    if (!url) throw new Error('请输入代理地址或 disable。');
+    status.proxy = await api('/api/proxy', { method: 'POST', body: { url } });
+    $('proxy-form').reset();
+    return url === 'disable' ? '已关闭代理，改用直连。' : '代理已保存。';
+  });
+});
+$('test-proxy').addEventListener('click', () => proxyAction(async () => {
+  const url = $('proxy-url').value.trim();
+  const { checks } = await api('/api/proxy/test', { method: 'POST', body: url ? { url } : {} });
+  return checks.map(item => `${item.label}：${item.reachable ? '已连通' : '未连通'}`).join('；');
+}));
+$('remove-proxy').addEventListener('click', () => proxyAction(async () => {
+  status.proxy = await api('/api/proxy', { method: 'DELETE' });
+  $('proxy-form').reset();
+  return '已恢复系统代理设置。';
+}));
+
 $('pixiv-form').addEventListener('submit', event => {
   event.preventDefault();
   formAction(event.currentTarget, async () => {

@@ -1,0 +1,12 @@
+{
+  "name": "pxder-webui",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Single-user WebUI for pxder",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "proxy-agent": "^6.2.1"
+  }
+}

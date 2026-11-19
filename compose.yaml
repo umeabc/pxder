@@ -7,6 +7,7 @@ services:
       PXDER_PASSWORD: ${PXDER_PASSWORD:?Set PXDER_PASSWORD in .env before starting}
       PXDER_ORIGIN: ${PXDER_ORIGIN:-}
       PXDER_PIXIV_TOKEN: ${PXDER_PIXIV_TOKEN:-}
+      PXDER_PROXY: ${PXDER_PROXY:-}
     ports:
       - "127.0.0.1:${PXDER_PORT:-8080}:8080"
     volumes:

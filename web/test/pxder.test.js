@@ -62,6 +62,13 @@ test('authenticated queue: import, scan, screen, fill missing page, cancel and r
   assert.equal((await request('/api/library'))[0], 401);
   assert.equal((await request('/api/login', { method: 'POST', origin: 'https://example.org', body: { password: PASSWORD } }))[0], 403);
   assert.equal(await login(), 200);
+  assert.equal((await request('/api/proxy', { method: 'POST', body: { url: 'ftp://localhost:123' } }))[0], 400);
+  const proxy = await post('/api/proxy', { url: 'http://user:secret@proxy.example.com:8080' });
+  assert.deepEqual(proxy, { mode: 'proxy', source: 'saved', value: 'http://proxy.example.com:8080' });
+  const { checks } = await post('/api/proxy/test');
+  assert.equal(checks.length, 3);
+  assert.ok(checks.every(item => item.reachable));
+  f.calls.length = 0;
   assert.equal((await request('/api/jobs', { method: 'POST', body: { type: 'pid', values: '42' } }))[0], 409);
   const fromDisk = await scanLibrary(f.legacy);
   assert.equal(fromDisk.scanned, 5);
@@ -101,7 +108,10 @@ test('authenticated queue: import, scan, screen, fill missing page, cancel and r
   app = await f.open(0, false);
   assert.equal((await request('/api/status'))[0], 401);
   assert.equal(await login(), 200);
-  assert.deepEqual((await request('/api/status'))[1].pixiv, { configured: true, source: 'saved' });
+  const saved = (await request('/api/status'))[1];
+  assert.deepEqual(saved.pixiv, { configured: true, source: 'saved' });
+  assert.deepEqual(saved.proxy, proxy);
+  assert.equal((await request('/api/proxy', { method: 'DELETE' }))[1].source, null);
   assert.equal((await request('/api/library'))[1].assets, 4);
   assert.equal((await request('/api/logout', { method: 'POST', body: {} }))[0], 200);
   assert.equal((await request('/api/jobs'))[0], 401);

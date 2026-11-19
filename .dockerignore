@@ -5,5 +5,7 @@
 !src/pixiv-api-config.js
 !web/
 !web/*.js
+!web/package.json
+!web/package-lock.json
 !web/public/
 !web/public/**

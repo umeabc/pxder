@@ -56,7 +56,7 @@ async function bytesJson(response) {
 }
 
 async function discard(response) {
-  try { await response.body?.cancel(); } catch {}
+  try { response.body?.destroy?.(); } catch {}
 }
 
 function responseError(status, mode) {
@@ -81,10 +81,10 @@ async function retry(operation, signal, retries = 1) {
 }
 
 class Pixiv {
-  constructor({ getToken, rotateToken, fetcher = fetch }) {
+  constructor({ getToken, rotateToken, transport }) {
     this.getToken = getToken;
     this.rotateToken = rotateToken;
-    this.fetcher = fetcher;
+    this.transport = transport;
   }
 
   forget() { this.auth = null; }
@@ -96,7 +96,7 @@ class Pixiv {
     const timeout = AbortSignal.timeout(mode === 'asset' ? 120_000 : 25_000);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
-      const response = await this.fetcher(url, { ...init, redirect: 'error', signal: combined });
+      const response = await this.transport(url, { ...init, signal: combined });
       if (!response.ok) {
         // The legacy endpoint sometimes signals its rate limit with a 400 JSON error.
         if (mode === 'api' && response.status === 400) {
@@ -119,7 +119,11 @@ class Pixiv {
       client_id: CLIENT_ID, client_secret: CLIENT_SECRET, get_secure_url: 'true', include_policy: 'true',
       grant_type: 'refresh_token', refresh_token: token,
     });
-    const data = await this.request(TOKEN_URL, { method: 'POST', headers: apiHeaders(), body }, signal, 'token');
+    const data = await this.request(TOKEN_URL, {
+      method: 'POST',
+      headers: { ...apiHeaders(), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    }, signal, 'token');
     const auth = data?.response ?? data;
     if (typeof auth?.access_token !== 'string' || !auth.access_token) throw new PixivError('Pixiv 未返回登录凭据，请重新获取 Refresh Token。', { stop: true });
     const expires = Number(auth.expires_in);

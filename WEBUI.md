@@ -31,7 +31,11 @@ ssh -N -L 8080:127.0.0.1:8080 user@your-server
 
 - **HTTPS 反代：** 如果用 Nginx/Caddy 在同一台服务器上公开访问，把域名的 HTTPS 流量转发到 `127.0.0.1:8080`，同时在 `.env` 中加 `PXDER_ORIGIN=https://pxder.example.com`（与浏览器地址完全一致，不带路径），重新执行 `docker compose up -d`。Nginx 上传上限设 `client_max_body_size 32m;`，并让代理读取超时不少于 65 秒。服务或代理应确保只有你能接触数据和凭据。
 - **容器数据：** `/data` 是索引和任务卷，`/downloads` 是新图卷。可以用 `docker compose cp pxder:/downloads ./pxder-downloads` 复制新图到宿主机。如果要改用宿主机目录，请给容器用户 `1000:1000` 写权限，并选支持硬链接的文件系统（完成后原子发布，避免覆盖同名文件）。备份时先停止服务再备份卷。不要运行 `docker compose down -v`，它会删除卷。
-- **不用 Docker：** 安装 Node.js 24 LTS，设置 `PXDER_PASSWORD` 后运行 `node web/server.js`，不需要 `npm install`。默认监听 `127.0.0.1:8080`；默认数据目录是 `.pxder-web/`，新图目录是 `downloads/`。可用 `PXDER_DATA_DIR`、`PXDER_DOWNLOAD_DIR`、`PXDER_PORT` 和 `PXDER_ORIGIN` 配置。不要多开实例共用同一数据卷。服务器须能访问 Pixiv 的 API 和图片 CDN。
+- **不用 Docker：** 安装 Node.js 24 LTS，先运行 `npm ci --prefix web --omit=dev`，设置 `PXDER_PASSWORD` 后运行 `node web/server.js`。默认监听 `127.0.0.1:8080`；默认数据目录是 `.pxder-web/`，新图目录是 `downloads/`。可用 `PXDER_DATA_DIR`、`PXDER_DOWNLOAD_DIR`、`PXDER_PORT` 和 `PXDER_ORIGIN` 配置。不要多开实例共用同一数据卷。服务器须能访问 Pixiv 的 API 和图片 CDN。
+
+## Pixiv 出站代理
+
+直连失败时，在 **Pixiv 设置 → 出站代理** 输入 HTTP、HTTPS 或 SOCKS4/5 代理地址。用 **测试连通性** 分别检查 Pixiv API、登录和图片 CDN；这个测试不发送账号凭据。代理保存后即时生效，覆盖服务器的系统代理变量；可输入 `disable` 强制直连，或恢复系统代理设置。部署时也可用 `PXDER_PROXY` 固定代理，固定后网页只能查看和测试。代理地址中的用户名和密码不会回显；不要把代理凭据写入 Git。
 
 ## 导入已下载的图片记录
 
@@ -66,7 +70,8 @@ docker compose -f compose.yaml -f compose.library.yaml up -d --build
 ## 测试
 
 ```bash
-node --test web/test/pxder.test.js
+npm ci --prefix web --omit=dev
+node --test web/test/*.test.js
 ```
 
 测试使用本地临时目录与模拟 Pixiv，不会读取真实账号、写入真实图库或请求外网。浏览器流程见 `web/test/browser_smoke.py`（需要 Python Playwright）。

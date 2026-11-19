@@ -229,6 +229,24 @@
           </div>
         </header>
 
+        <form id="proxy-form" class="workbench-card stack-form" novalidate aria-labelledby="proxy-heading">
+          <div class="card-subheader">
+            <h3 id="proxy-heading" class="card-title">出站代理</h3>
+            <p id="proxy-state" class="card-note">正在读取代理设置。</p>
+          </div>
+          <div class="field-group">
+            <label for="proxy-url" class="field-label">代理地址</label>
+            <input id="proxy-url" class="field-input" type="text" inputmode="url" maxlength="2048" autocomplete="off" spellcheck="false" placeholder="http://proxy.example.com:8080" aria-describedby="proxy-hint">
+            <span id="proxy-hint" class="field-hint">支持 HTTP、HTTPS 和 SOCKS。填 disable 强制直连；恢复系统设置后使用服务器的代理环境变量。</span>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">保存代理</button>
+            <button type="button" id="test-proxy" class="btn btn-secondary">测试连通性</button>
+            <button type="button" id="remove-proxy" class="btn btn-secondary" hidden>恢复系统设置</button>
+          </div>
+          <p id="proxy-result" class="row-meta" role="status" aria-live="polite" hidden></p>
+        </form>
+
         <form id="pixiv-form" class="workbench-card stack-form" novalidate>
           <div class="field-group">
             <label for="pixiv-token" class="field-label">Pixiv Refresh Token</label>

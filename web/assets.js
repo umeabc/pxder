@@ -119,7 +119,7 @@ async function downloadOnce(pixiv, url, key, destination, signal) {
   const length = encoded && encoded !== 'identity' ? null : response.headers.get('content-length');
   const accepts = key[1] === 'image' ? type?.startsWith('image/') : /^(?:application\/(?:zip|octet-stream|x-zip-compressed))$/.test(type ?? '');
   if (!accepts || !response.body || (length !== null && (Number(length) <= 0 || Number(length) > FILE_LIMIT))) {
-    await response.body?.cancel();
+    await response.body?.destroy?.();
     throw new PixivError('Pixiv 返回的文件类型或大小不符合预期。');
   }
   const temp = path.join(destination.folder, `.pxder-${randomUUID()}.part`);
